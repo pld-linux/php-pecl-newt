@@ -1,0 +1,1486 @@
+diff -burN --exclude=CVS --exclude=package.xml --exclude=.cvsignore newt-0.2/examples/01.php newt/examples/01.php
+--- newt-0.2/examples/01.php	2004-12-09 17:45:38.000000000 +0100
++++ newt/examples/01.php	2004-12-13 20:59:34.520370376 +0100
+@@ -34,7 +34,8 @@
+ 	newt_refresh ();
+ 	newt_run_form ($form);
+ 
+-	newt_form_destroy ($f);
+ 	newt_pop_window ();
++	newt_pop_help_line ();
+ 	newt_finished ();
++	newt_form_destroy ($form);
+ ?>
+diff -burN --exclude=CVS --exclude=package.xml --exclude=.cvsignore newt-0.2/newt.c newt/newt.c
+--- newt-0.2/newt.c	2004-12-09 17:45:38.000000000 +0100
++++ newt/newt.c	2004-12-13 20:59:34.498373720 +0100
+@@ -16,7 +16,7 @@
+   +----------------------------------------------------------------------+
+ */
+ 
+-/* $Id$ */
++/* $Id$ */
+ 
+ #include <newt.h>
+ 
+@@ -43,7 +43,9 @@
+ 	PHP_FE(newt_init,							NULL)
+ 	PHP_FE(newt_finished,						NULL)
+ 	PHP_FE(newt_cls,							NULL)
++#ifdef HAVE_NEWT_RESIZE_SCREEN
+ 	PHP_FE(newt_resize_screen,					NULL)
++#endif
+ 	PHP_FE(newt_wait_for_key,					NULL)
+ 	PHP_FE(newt_clear_key_buffer,				NULL)
+ 	PHP_FE(newt_delay,							NULL)
+@@ -80,7 +82,11 @@
+ #ifdef HAVE_NEWT_LISTITEM_GET_DATA
+ 	PHP_FE(newt_listitem_get_data,				NULL)
+ #endif
++#ifdef all_args_by_ref
++	PHP_FE(newt_get_screen_size,				all_args_by_ref)
++#else
+ 	PHP_FE(newt_get_screen_size,				NULL)
++#endif
+ 	PHP_FE(newt_label,							NULL)
+ 	PHP_FE(newt_label_set_text,					NULL)
+ 	PHP_FE(newt_vertical_scrollbar,				NULL)
+@@ -197,11 +203,17 @@
+ 
+ /* {{{ newt_comp_dtor
+  */
+-void newt_comp_dtor (zend_rsrc_list_entry *rsrc TSRMLS_DC)
++static void newt_comp_dtor (zend_rsrc_list_entry *rsrc TSRMLS_DC)
+ {
++	/* XXX Disabled!!! Someone has to find solution of how to free callback 
++	 * data structures, since after call to newtFormDestroy - there is no
++	 * access to them, so this code segfaults! */
++	return;
++
+ 	newtComponent comp = (newtComponent) rsrc->ptr;
+ 	newt_data_st * cb = (newt_data_st *) comp->callbackData;
+ 
++	/* Free callback structure */
+ 	if (cb) {
+ 		if (cb->func_name) efree (cb->func_name);
+ 		if (cb->data) efree (cb->data);
+@@ -215,31 +227,32 @@
+ static void php_newt_init_globals (zend_newt_globals *newt_globals)
+ {
+ 	newt_globals->newt_help_callback = NULL;
++	newt_globals->newt_has_inited = 0;
+ }
+ /* }}} */
+ 
+-/* {{{ _get_resource_by_data
++/* {{{ get_resource_by_data
+  */
+-int _get_resource_by_data (zval * rsrc TSRMLS_CC, void * data, int le_type)
++static int get_resource_by_data (zval * rsrc, void * data, int le_type)
+ {
+ 	zend_rsrc_list_entry *le;
+ 	char *key = NULL;
+ 	uint key_len;
+    	ulong rsrc_id;
+-	zval * tmp;
+ 
+-	MAKE_STD_ZVAL (tmp);
++	TSRMLS_FETCH();
++
++	if (!rsrc) {	
++	  MAKE_STD_ZVAL (rsrc);
++	}
+ 
+ 	zend_hash_internal_pointer_reset (&EG(regular_list));
+ 	while (zend_hash_get_current_data (&EG(regular_list), (void **) &le) == SUCCESS) {
+ 		zend_hash_get_current_key_ex(&EG(regular_list), &key, &key_len, &rsrc_id, 0, NULL);
+ 		if(le->type == le_type && le->ptr == data) {
+-			Z_LVAL_P (tmp) = rsrc_id;
+-			Z_TYPE_P (tmp) = IS_RESOURCE;
+-			zval_copy_ctor (tmp);
+-			*rsrc = *tmp;
++			Z_LVAL_P (rsrc) = rsrc_id;
++			Z_TYPE_P (rsrc) = IS_RESOURCE;
+ 			zval_copy_ctor (rsrc);
+-			zval_dtor (tmp);
+ 			return SUCCESS;
+ 		}
+ 		zend_hash_move_forward(&EG(regular_list));
+@@ -250,7 +263,7 @@
+ 
+ /* {{{ newt_comp_callback_wrapper
+  */
+-void newt_comp_callback_wrapper (newtComponent component, newt_data_st *cb)
++static void newt_comp_callback_wrapper (newtComponent component, newt_data_st *cb)
+ {
+ 	zval *z_func_name;
+     zval *args[2];
+@@ -258,6 +271,8 @@
+ 	php_unserialize_data_t var_hash;
+ 	const char *p;
+ 
++	TSRMLS_FETCH();
++
+ 	if (!cb) {
+ 		php_error_docref(NULL TSRMLS_CC, E_ERROR, "Null data has been passed to the newt callback wrapper");
+ 		return;
+@@ -268,7 +283,7 @@
+ 
+ 	/* First argument is component resource */
+ 	MAKE_STD_ZVAL (args[0]);
+-	if (NEWT_GET_RESOURCE_BY_DATA (args[0], component) == FAILURE) {
++	if (get_resource_by_data (args[0], component, le_newt_comp) == FAILURE) {
+ 		php_error_docref(NULL TSRMLS_CC, E_WARNING, "Unable to find component in the global list of resources");
+ 		return;
+ 	}
+@@ -295,7 +310,7 @@
+ /* {{{
+  * proto newt_entry_filter_callback_wrapper (newtComponent entry, void * data, int ch, int cursor)
+  */
+-void newt_entry_filter_callback_wrapper (newtComponent entry, newt_data_st * cb, int ch, int cursor)
++static void newt_entry_filter_callback_wrapper (newtComponent entry, newt_data_st * cb, int ch, int cursor)
+ {
+ 	zval *z_func_name;
+     zval *args[4];
+@@ -303,6 +318,8 @@
+ 	php_unserialize_data_t var_hash;
+ 	const char *p;
+ 
++	TSRMLS_FETCH();
++
+ 	if (!cb) {
+ 		php_error_docref(NULL TSRMLS_CC, E_ERROR, "Null data has been passed to the newt callback wrapper");
+ 		return;
+@@ -313,7 +330,7 @@
+ 
+ 	/* First argument is component resource */
+ 	MAKE_STD_ZVAL (args[0]);
+-	if (NEWT_GET_RESOURCE_BY_DATA (args[0], entry) == FAILURE) {
++	if (get_resource_by_data (args[0], entry, le_newt_comp) == FAILURE) {
+ 		php_error_docref(NULL TSRMLS_CC, E_WARNING, "Unable to find component in the global list of resources");
+ 		return;
+ 	}
+@@ -349,7 +366,7 @@
+ /* {{{
+  * proto newt_suspend_callback_wrapper (void * data)
+  */
+-void newt_suspend_callback_wrapper (newt_data_st * cb)
++static void newt_suspend_callback_wrapper (newt_data_st * cb)
+ {
+ 	zval *z_func_name;
+     zval *args[1];
+@@ -357,6 +374,8 @@
+ 	php_unserialize_data_t var_hash;
+ 	const char *p;
+ 
++	TSRMLS_FETCH();
++
+ 	if (!cb) {
+ 		php_error_docref(NULL TSRMLS_CC, E_ERROR, "Null data has been passed to the newt callback wrapper");
+ 		return;
+@@ -386,7 +405,7 @@
+ /* {{{
+  * proto newt_help_callback_wrapper (newtComponent form, char *help)
+  */
+-void newt_help_callback_wrapper (newtComponent form, char *help)
++static void newt_help_callback_wrapper (newtComponent form, char *help)
+ {
+ 	zval *z_func_name;
+     zval *args[2];
+@@ -399,7 +418,7 @@
+ 
+ 	/* First argument is component resource */
+ 	MAKE_STD_ZVAL (args[0]);
+-	if (NEWT_GET_RESOURCE_BY_DATA (args[0], form) == FAILURE) {
++	if (get_resource_by_data (args[0], form, le_newt_comp) == FAILURE) {
+ 		php_error_docref(NULL TSRMLS_CC, E_WARNING, "Unable to find component in the global list of resources");
+ 		return;
+ 	}
+@@ -423,7 +442,7 @@
+ /* {{{
+  * proto newt_call_php_function
+  */
+-void newt_call_php_function (INTERNAL_FUNCTION_PARAMETERS, char *func_name, zval **ret_val, int argc, zval ***args)
++static void newt_call_php_function (INTERNAL_FUNCTION_PARAMETERS, char *func_name, zval **ret_val, int argc, zval ***args)
+ {
+ 	zval *z_func_name;
+ 
+@@ -493,7 +512,9 @@
+ 	REGISTER_NEWT_CONSTANT(NEWT_FLAG_SELECTED);
+ 	REGISTER_NEWT_CONSTANT(NEWT_FLAG_CHECKBOX);
+ 	REGISTER_NEWT_CONSTANT(NEWT_FLAG_PASSWORD);
++#ifdef NEWT_FLAG_SHOWCURSOR
+ 	REGISTER_NEWT_CONSTANT(NEWT_FLAG_SHOWCURSOR);
++#endif
+ 	REGISTER_NEWT_CONSTANT(NEWT_FD_READ);
+ 	REGISTER_NEWT_CONSTANT(NEWT_FD_WRITE);
+ 	REGISTER_NEWT_CONSTANT(NEWT_FD_EXCEPT);
+@@ -577,12 +598,14 @@
+  */
+ PHP_MSHUTDOWN_FUNCTION(newt)
+ {
+-	TSRMLS_FETCH ();
+-
+ 	if (NEWT_G(newt_help_callback)) {
+ 	  efree (NEWT_G(newt_help_callback));
+ 	}
+ 
++	if (NEWT_G(newt_has_inited)) {
++		newtFinished();
++	}
++
+ 	return SUCCESS;
+ }
+ /* }}} */
+@@ -603,6 +626,8 @@
+ PHP_FUNCTION(newt_init)
+ {
+ 	if(ZEND_NUM_ARGS() != 0) { WRONG_PARAM_COUNT; }
++
++	NEWT_G(newt_has_inited) = 1;
+ 	RETURN_LONG (newtInit());
+ }
+ /* }}} */
+@@ -613,6 +638,8 @@
+ PHP_FUNCTION(newt_finished)
+ {
+ 	if(ZEND_NUM_ARGS() != 0) { WRONG_PARAM_COUNT; }
++
++	NEWT_G(newt_has_inited) = 0;
+ 	RETURN_LONG (newtFinished());
+ }
+ /* }}} */
+@@ -627,24 +654,22 @@
+ }
+ /* }}} */
+ 
++#ifdef HAVE_NEWT_RESIZE_SCREEN
+ /* {{{
+  * proto newt_resize_screen([bool redraw])
+  */
+ PHP_FUNCTION(newt_resize_screen)
+ {
+-#ifdef HAVE_NEWT_RESIZE_SCREEN
+ 	int redraw = 1;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc < 0 || argc > 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "|b", &redraw) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "|b", &redraw) == FAILURE) {
+ 		return;
+ 	}
+ 
+ 	newtResizeScreen (redraw);
+-#endif
+ }
+ /* }}} */
++#endif
+ 
+ /* {{{
+  * proto newt_wait_for_key()
+@@ -672,11 +697,7 @@
+ PHP_FUNCTION(newt_delay)
+ {
+ 	int usecs;
+-
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-
+-	if (zend_parse_parameters (argc, "l", &usecs) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "l", &usecs) == FAILURE) {
+ 		return;
+ 	}
+ 	newtDelay (usecs);
+@@ -695,9 +716,7 @@
+ 	char * title = NULL;
+ 	int title_len;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc < 4 || argc > 5) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "llll|s", &left, &top, &width, &height, &title, &title_len) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "llll|s", &left, &top, &width, &height, &title, &title_len) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -715,9 +734,7 @@
+ 	char * title = NULL;
+ 	int title_len;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc < 2 || argc > 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "ll|s", &width, &height, &title, &title_len) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "ll|s", &width, &height, &title, &title_len) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -772,9 +789,7 @@
+ 	php_serialize_data_t var_hash;
+ 	smart_str buf = {0};
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zz", &z_func_name, &z_data) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zz", &z_func_name, &z_data) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -785,6 +800,7 @@
+ 
+ 	/* Fill callback struct */
+ 	cb = emalloc (sizeof(newt_data_st));
++	memset (cb, 0, sizeof(newt_data_st));
+ 
+ 	if (!zend_is_callable(z_func_name, 0, &cb->func_name)) {
+ 		efree (cb->func_name);
+@@ -811,9 +827,7 @@
+ 	zval *z_func_name;
+ 	char * func_name;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "z", &z_func_name) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z", &z_func_name) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -850,9 +864,7 @@
+ 	char * text = NULL;
+ 	int text_len;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc < 0 || argc > 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "|s!", &text, &text_len) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "|s!", &text, &text_len) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -890,9 +902,7 @@
+ 	char * text = NULL;
+ 	int text_len;
+ 	
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "lls", &left, &top, &text, &text_len) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "lls", &left, &top, &text, &text_len) == FAILURE) {
+ 		return;
+ 	}
+ 	newtDrawRootText (left, top, text);
+@@ -940,10 +950,7 @@
+ 	int text_len;
+ 	newtComponent button;
+ 	
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-
+-	if (zend_parse_parameters (argc, "lls", &left, &top, &text, &text_len) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "lls", &left, &top, &text, &text_len) == FAILURE) {
+ 		return;
+ 	}
+ 	button = newtCompactButton (left, top, text);
+@@ -964,10 +971,7 @@
+ 	int text_len;
+ 	newtComponent button;
+ 	
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-
+-	if (zend_parse_parameters (argc, "lls", &left, &top, &text, &text_len) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "lls", &left, &top, &text, &text_len) == FAILURE) {
+ 		return;
+ 	}
+ 	button = newtButton (left, top, text);
+@@ -992,9 +996,7 @@
+ 	int seq_len;
+ 	newtComponent checkbox;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc < 4 || argc > 5) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "llss|s", &left, &top, &text, &text_len, &def_val, &def_val_len
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "llss|s", &left, &top, &text, &text_len, &def_val, &def_val_len
+ 				, &seq, &seq_len) == FAILURE) {
+ 		return;
+ 	}
+@@ -1020,9 +1022,7 @@
+ 	newtComponent checkbox;
+ 	char ret_value[2];
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "z", &z_checkbox) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z", &z_checkbox) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -1044,9 +1044,7 @@
+ 	char * value = NULL;
+ 	int value_len;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zs", &z_checkbox, &value, &value_len) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zs", &z_checkbox, &value, &value_len) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -1070,9 +1068,7 @@
+ 	int flags;
+ 	int sense;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zll", &z_checkbox, &flags, &sense) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zll", &z_checkbox, &flags, &sense) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -1095,9 +1091,7 @@
+ 	newtComponent prev_button = NULL;
+ 	newtComponent radiobutton;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc < 4 || argc > 5) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "llsb|z!", &left, &top, 
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "llsb|z!", &left, &top, 
+ 				&text, &text_len, &is_default, &z_prev_button) == FAILURE) {
+ 		return;
+ 	}
+@@ -1121,14 +1115,12 @@
+ 	zval * z_set_member;
+ 	newtComponent set_member;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "z", &z_set_member) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z", &z_set_member) == FAILURE) {
+ 		return;
+ 	}
+ 
+ 	ZEND_FETCH_RESOURCE(set_member, newtComponent, &z_set_member, -1, le_newt_comp_name, le_newt_comp);
+-	NEWT_GET_RESOURCE_BY_DATA (return_value, newtRadioGetCurrent(set_member));
++	get_resource_by_data (return_value, newtRadioGetCurrent(set_member), le_newt_comp);
+ }
+ /* }}} */
+ 
+@@ -1150,9 +1142,7 @@
+ 	php_serialize_data_t var_hash;
+ 	smart_str buf = {0};
+ 	
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc < 6 || argc > 7) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "llsbzz|l", &left, &top, &text, &text_len, 
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "llsbzz|l", &left, &top, &text, &text_len, 
+ 				&is_default, &z_prev_item, &z_data, &flags) == FAILURE) {
+ 		return;
+ 	}
+@@ -1182,9 +1172,7 @@
+ 	char * text = NULL;
+ 	int text_len;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zs", &z_item, &text, &text_len) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zs", &z_item, &text, &text_len) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -1205,9 +1193,7 @@
+ 	php_unserialize_data_t var_hash;
+ 	const char *data;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "z", &z_item) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z", &z_item) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -1219,8 +1205,6 @@
+ 		PHP_VAR_UNSERIALIZE_INIT (var_hash);
+ 		php_var_unserialize(&return_value, &data, data + strlen(data), &var_hash TSRMLS_CC);
+ 		PHP_VAR_UNSERIALIZE_DESTROY (var_hash);
+-
+-		zval_copy_ctor (return_value);
+ 	}
+ }
+ /* }}} */
+@@ -1234,7 +1218,7 @@
+ 	zval *z_cols = NULL, *z_rows = NULL;
+ 	int cols, rows;
+ 
+-	if (zend_parse_parameters (ZEND_NUM_ARGS(), "z/z/", &z_cols, &z_rows) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z/z/", &z_cols, &z_rows) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -1262,9 +1246,7 @@
+ 	int text_len;
+ 	newtComponent label;
+ 	
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "lls", &left, &top, &text, &text_len) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "lls", &left, &top, &text, &text_len) == FAILURE) {
+ 		return;
+ 	}
+ 	label = newtLabel (left, top, text);
+@@ -1284,9 +1266,7 @@
+ 	char * text = NULL;
+ 	int text_len;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zs", &z_label, &text, &text_len) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zs", &z_label, &text, &text_len) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -1305,9 +1285,7 @@
+ 	int normalColorset = NEWT_COLORSET_WINDOW, thumbColorset = NEWT_COLORSET_ACTCHECKBOX;
+ 	newtComponent scrollbar;
+ 	
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc < 3 || argc > 5) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "lll|ll", &left, &top, &height, 
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "lll|ll", &left, &top, &height, 
+ 				&normalColorset, &thumbColorset) == FAILURE) {
+ 		return;
+ 	}
+@@ -1328,9 +1306,7 @@
+ 	int where, total;
+ 	newtComponent scrollbar;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zll", &z_scrollbar, &where, &total) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zll", &z_scrollbar, &where, &total) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -1347,9 +1323,7 @@
+    	int left, top, height, flags = 0;
+ 	newtComponent listbox;
+ 	
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc < 3 || argc > 4) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "lll|l", &left, &top, &height, &flags) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "lll|l", &left, &top, &height, &flags) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -1368,9 +1342,7 @@
+ 	zval * z_listbox;
+ 	newtComponent listbox;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "z", &z_listbox) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z", &z_listbox) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -1389,9 +1361,7 @@
+ 	newtComponent listbox;
+ 	int num;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zl", &z_listbox, &num) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zl", &z_listbox, &num) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -1411,9 +1381,7 @@
+ 	php_serialize_data_t var_hash;
+ 	smart_str buf = {0};
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zz!", &z_listbox, &z_key) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zz!", &z_listbox, &z_key) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -1437,9 +1405,7 @@
+ 	char *text = NULL;
+ 	int text_len;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zls", &z_listbox, &num, &text, &text_len) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zls", &z_listbox, &num, &text, &text_len) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -1457,9 +1423,7 @@
+ 	newtComponent listbox;
+ 	int width;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zl", &z_listbox, &width) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zl", &z_listbox, &width) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -1481,9 +1445,7 @@
+ 	php_serialize_data_t var_hash;
+ 	smart_str buf = {0};
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zlz!", &z_listbox, &num, &z_data) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zlz!", &z_listbox, &num, &z_data) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -1509,9 +1471,7 @@
+ 	php_serialize_data_t var_hash;
+ 	smart_str buf = {0};
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zsz!", &z_listbox, &text, &text_len, &z_data) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zsz!", &z_listbox, &text, &text_len, &z_data) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -1537,9 +1497,7 @@
+ 	php_serialize_data_t var_hash;
+ 	smart_str data_buf = {0}, key_buf = {0};
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 4) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zsz!z!", &z_listbox, &text, &text_len, &z_data, &z_key) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zsz!z!", &z_listbox, &text, &text_len, &z_data, &z_key) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -1564,9 +1522,7 @@
+ 	php_serialize_data_t var_hash;
+ 	smart_str buf = {0};
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zz!", &z_listbox, &z_key) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zz!", &z_listbox, &z_key) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -1587,9 +1543,7 @@
+ 	zval * z_listbox;
+ 	newtComponent listbox;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "z", &z_listbox) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z", &z_listbox) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -1611,9 +1565,7 @@
+ 	const char *p;
+ 	php_unserialize_data_t var_hash;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc < 2 || argc > 4) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zl|z/!z/!", &z_listbox, &num, &z_text, &z_data) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zl|z/!z/!", &z_listbox, &num, &z_text, &z_data) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -1652,9 +1604,7 @@
+ 	int i;
+ 	const char *p;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "z", &z_listbox) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z", &z_listbox) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -1687,9 +1637,7 @@
+ 	zval * z_listbox;
+ 	newtComponent listbox;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "z", &z_listbox) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z", &z_listbox) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -1710,9 +1658,7 @@
+ 	php_serialize_data_t var_hash;
+ 	smart_str buf = {0};
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zz!l", &z_listbox, &z_key, &sense) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zz!l", &z_listbox, &z_key, &sense) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -1725,28 +1671,24 @@
+ }
+ /* }}} */
+ 
++#ifdef HAVE_NEWT_LISTBOX_ITEM_COUNT
+ /* {{{
+  * proto int newt_listbox_item_count (resource listbox)
+  */
+ PHP_FUNCTION(newt_listbox_item_count)
+ {
+-#ifdef HAVE_NEWT_LISTBOX_ITEM_COUNT
+ 	zval * z_listbox;
+ 	newtComponent listbox;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "z", &z_listbox) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z", &z_listbox) == FAILURE) {
+ 		return;
+ 	}
+ 	
+ 	ZEND_FETCH_RESOURCE(listbox, newtComponent, &z_listbox, -1, le_newt_comp_name, le_newt_comp);
+ 	RETURN_LONG (newtListboxItemCount (listbox));
+-#else
+-	RETURN_FALSE;
+-#endif
+ }
+ /* }}} */
++#endif
+ 
+ /* {{{
+  * proto resource newt_checkbox_tree (int left, int top, int height [, int flags])
+@@ -1759,9 +1701,7 @@
+ 	int height;
+ 	int flags = 0;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc < 3 || argc > 4) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "lll|l", &left, &top, &height, &flags) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "lll|l", &left, &top, &height, &flags) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -1785,9 +1725,7 @@
+ 	int seq_len;
+ 	int flags = 0;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc < 3 || argc > 4) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "llls!|l", &left, &top, &height, &seq, &seq_len, &flags) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "llls!|l", &left, &top, &height, &seq, &seq_len, &flags) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -1812,9 +1750,7 @@
+ 	int i;
+ 	const char *p;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "z", &z_checkboxtree) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z", &z_checkboxtree) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -1849,9 +1785,7 @@
+ 	php_unserialize_data_t var_hash;
+ 	const char *current;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "z", &z_checkboxtree) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z", &z_checkboxtree) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -1877,9 +1811,7 @@
+ 	php_serialize_data_t var_hash;
+ 	smart_str buf = {0};
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zz", &z_checkboxtree, &z_data) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zz", &z_checkboxtree, &z_data) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -1909,9 +1841,7 @@
+ 	char * seqnum = NULL;
+ 	int seqnum_len;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zs!", &z_checkboxtree, &seqnum, &seqnum_len) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zs!", &z_checkboxtree, &seqnum, &seqnum_len) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -1956,7 +1886,7 @@
+ 
+ 	int argc = ZEND_NUM_ARGS();
+ 	if (argc < 5) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zszl", &z_checkboxtree, &text, &text_len, &z_data, &flags) == FAILURE) {
++	if (zend_parse_parameters (argc TSRMLS_CC, "zszl", &z_checkboxtree, &text, &text_len, &z_data, &flags) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -2009,7 +1939,7 @@
+ 	smart_str buf = {0};
+ 
+ 	if (5 != ZEND_NUM_ARGS()) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (5, "zszla", &z_checkboxtree, &text, &text_len, &z_data, &flags, &z_indexes) == FAILURE) {
++	if (zend_parse_parameters (5 TSRMLS_CC, "zszla", &z_checkboxtree, &text, &text_len, &z_data, &flags, &z_indexes) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -2063,7 +1993,7 @@
+ 	smart_str buf = {0};
+ 
+ 	if (2 != ZEND_NUM_ARGS()) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (2, "zz", &z_checkboxtree, &z_data) != FAILURE) {
++	if (zend_parse_parameters (2 TSRMLS_CC, "zz", &z_checkboxtree, &z_data) != FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -2103,9 +2033,7 @@
+ 	php_serialize_data_t var_hash;
+ 	smart_str buf = {0};
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zzs", &z_checkbox_tree, &z_data, &text, &text_len) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zzs", &z_checkbox_tree, &z_data, &text, &text_len) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -2128,9 +2056,7 @@
+ 	newtComponent checkbox_tree;
+ 	int width;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zl", &z_checkbox_tree, &width) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zl", &z_checkbox_tree, &width) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -2152,9 +2078,7 @@
+ 	php_serialize_data_t var_hash;
+ 	smart_str buf = {0};
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zz!", &z_checkboxtree, &z_data) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zz!", &z_checkboxtree, &z_data) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -2183,9 +2107,7 @@
+ 	php_serialize_data_t var_hash;
+ 	smart_str buf = {0};
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zz!s", &z_checkboxtree, &z_data, &value, &value_len) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zz!s", &z_checkboxtree, &z_data, &value, &value_len) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -2218,9 +2140,7 @@
+ 	int flags = 0;
+ 	newtComponent textbox;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc < 6 || argc > 7) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "llslll|l", &left, &top, &text, &text_len, 
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "llslll|l", &left, &top, &text, &text_len, 
+ 				&width, &flex_down, &flex_up, &flags) == FAILURE) {
+ 		return;
+ 	}
+@@ -2244,9 +2164,7 @@
+ 	int flags = 0;
+ 	newtComponent textbox;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc < 4 || argc > 5) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "llll|l", &left, &top, &width, &height, &flags) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "llll|l", &left, &top, &width, &height, &flags) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -2267,9 +2185,7 @@
+ 	char * text = NULL;
+ 	int text_len;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zs", &z_textbox, &text, &text_len) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zs", &z_textbox, &text, &text_len) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -2287,9 +2203,7 @@
+ 	newtComponent textbox;
+ 	int height;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zl", &z_textbox, &height) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zl", &z_textbox, &height) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -2306,9 +2220,7 @@
+ 	zval * z_textbox;
+ 	newtComponent textbox;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "z", &z_textbox) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z", &z_textbox) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -2329,9 +2241,8 @@
+ 	int width;
+ 	int flex_down, flex_up;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 6) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "slllz/z/", &text, &text_len, &width, &flex_down, &flex_up, &z_actual_width, &z_actual_height) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "slllz/z/", &text, &text_len, &width, &flex_down,
++				&flex_up, &z_actual_width, &z_actual_height) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -2362,9 +2273,7 @@
+    newtComponent vert_bar = NULL;
+    newtComponent form;
+ 
+-   int argc = ZEND_NUM_ARGS();
+-   if (argc < 0 || argc > 3) { WRONG_PARAM_COUNT; }
+-   if (zend_parse_parameters (argc, "|z!s!l", &z_vert_bar, &help, &help_len, &flags) == FAILURE) {
++   if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "|z!s!l", &z_vert_bar, &help, &help_len, &flags) == FAILURE) {
+ 	   return;
+    }
+    
+@@ -2387,9 +2296,7 @@
+ 	newtComponent form;
+ 	int milliseconds;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zl", &z_form, &milliseconds) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zl", &z_form, &milliseconds) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -2410,9 +2317,7 @@
+ 	int fd;
+ 	int flags = 0;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc < 2 || argc > 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zz|l", &z_form, &z_stream, &flags) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zz|l", &z_form, &z_stream, &flags) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -2437,9 +2342,7 @@
+ 	zval * z_form;
+ 	newtComponent form;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "z", &z_form) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z", &z_form) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -2456,14 +2359,12 @@
+ 	zval * z_form;
+ 	newtComponent form;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "z", &z_form) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z", &z_form) == FAILURE) {
+ 		return;
+ 	}
+ 
+ 	ZEND_FETCH_RESOURCE(form, newtComponent, &z_form, -1, le_newt_comp_name, le_newt_comp);
+-	NEWT_GET_RESOURCE_BY_DATA (return_value, newtFormGetCurrent(form));
++	get_resource_by_data (return_value, newtFormGetCurrent(form), le_newt_comp);
+ }
+ /* }}} */
+ 
+@@ -2476,9 +2377,7 @@
+ 	newtComponent form;
+ 	int background;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zl", &z_form, &background) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zl", &z_form, &background) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -2498,9 +2397,7 @@
+ 	zval * z_current;
+ 	newtComponent current;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zz", &z_form, &z_current) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zz", &z_form, &z_current) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -2521,9 +2418,7 @@
+ 	newtComponent form;
+ 	newtComponent component;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zz", &z_form, &z_component) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zz", &z_form, &z_component) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -2545,9 +2440,7 @@
+ 	newtComponent form;
+ 	newtComponent component;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "za", &z_form, &z_components) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "za", &z_form, &z_components) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -2572,9 +2465,7 @@
+ 	newtComponent form;
+ 	int height;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zl", &z_form, &height) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zl", &z_form, &height) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -2592,14 +2483,11 @@
+ 	newtComponent form;
+ 	int width;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zl", &z_form, &width) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zl", &z_form, &width) == FAILURE) {
+ 		return;
+ 	}
+ 	
+ 	ZEND_FETCH_RESOURCE(form, newtComponent, &z_form, -1, le_newt_comp_name, le_newt_comp);
+-
+ 	newtFormSetWidth (form, width);
+ }
+ /* }}} */
+@@ -2612,14 +2500,12 @@
+ 	zval * z_form = NULL;
+ 	newtComponent form;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "z", &z_form) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z", &z_form) == FAILURE) {
+ 		return;
+ 	}
+ 	
+ 	ZEND_FETCH_RESOURCE(form, newtComponent, &z_form, -1, le_newt_comp_name, le_newt_comp);
+-	NEWT_GET_RESOURCE_BY_DATA (return_value, newtRunForm(form));
++	get_resource_by_data (return_value, newtRunForm(form), le_newt_comp);
+ }
+ /* }}} */
+ 
+@@ -2634,7 +2520,7 @@
+ 	struct newtExitStruct es;
+ 	zval *z_reason, *z_watch, *z_key, *z_component;
+ 
+-	if (zend_parse_parameters (ZEND_NUM_ARGS(), "zz/", &z_form, &z_es) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zz/", &z_form, &z_es) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -2644,7 +2530,6 @@
+ 	}
+ 
+ 	ZEND_FETCH_RESOURCE(form, newtComponent, &z_form, -1, le_newt_comp_name, le_newt_comp);
+-
+ 	newtFormRun (form, &es);
+ 
+ 	MAKE_STD_ZVAL(z_reason);
+@@ -2655,7 +2540,7 @@
+ 	ZVAL_LONG(z_reason, es.reason);
+ 	ZVAL_LONG(z_watch, es.u.watch);
+ 	ZVAL_LONG(z_key, es.u.key);
+-	NEWT_GET_RESOURCE_BY_DATA (z_component, es.u.co);
++	get_resource_by_data (z_component, es.u.co, le_newt_comp);
+ 
+ 	zend_hash_update (HASH_OF(z_es), "reason", sizeof("reason"), (void *)&z_reason, sizeof(zval *), NULL);
+ 	zend_hash_update (HASH_OF(z_es), "watch", sizeof("watch"), (void *)&z_watch, sizeof(zval *), NULL);
+@@ -2672,14 +2557,11 @@
+ 	zval * z_form = NULL;
+ 	newtComponent form;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "z", &z_form) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z", &z_form) == FAILURE) {
+ 		return;
+ 	}
+ 
+ 	ZEND_FETCH_RESOURCE(form, newtComponent, &z_form, -1, le_newt_comp_name, le_newt_comp);
+-
+ 	newtDrawForm (form);
+ }
+ /* }}} */
+@@ -2693,9 +2575,7 @@
+ 	newtComponent form;
+ 	int key;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zl", &z_form, &key) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zl", &z_form, &key) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -2717,9 +2597,7 @@
+ 	int init_value_len;
+ 	int flags = 0;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc < 3 || argc > 5) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "lll|s!l", &left, &top, &width, 
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "lll|s!l", &left, &top, &width, 
+ 				&init_value, &init_value_len, &flags) == FAILURE) {
+ 		return;
+ 	}
+@@ -2742,9 +2620,7 @@
+ 	int value_len;
+ 	int cursor_at_end = 0;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc < 2 || argc > 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zs|b", &z_entry, &value, &value_len, &cursor_at_end) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zs|b", &z_entry, &value, &value_len, &cursor_at_end) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -2764,9 +2640,7 @@
+ 	php_serialize_data_t var_hash;
+ 	smart_str buf = {0};
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zzz", &z_entry, &z_func_name, &z_data) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zzz", &z_entry, &z_func_name, &z_data) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -2777,6 +2651,7 @@
+ 
+ 	/* Fill callback struct */
+ 	cb = emalloc (sizeof(newt_data_st));
++	memset (cb, 0, sizeof(newt_data_st));
+ 
+ 	if (!zend_is_callable(z_func_name, 0, &cb->func_name)) {
+ 		efree (cb->func_name);
+@@ -2804,9 +2679,7 @@
+ 	zval * z_entry;
+ 	newtComponent entry;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "z", &z_entry) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z", &z_entry) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -2826,9 +2699,7 @@
+ 	int flags;
+ 	int sense;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zll", &z_entry, &flags, &sense) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zll", &z_entry, &flags, &sense) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -2848,9 +2719,7 @@
+ 	int width;
+ 	unsigned long long full_value;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 4) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "llll", &left, &top, &width, &full_value) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "llll", &left, &top, &width, &full_value) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -2870,9 +2739,7 @@
+ 	newtComponent scale;
+ 	unsigned long long amount;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zl", &z_scale, &amount) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zl", &z_scale, &amount) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -2892,9 +2759,7 @@
+ 	php_serialize_data_t var_hash;
+ 	smart_str buf = {0};
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zzz", &z_component, &z_func_name, &z_data) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zzz", &z_component, &z_func_name, &z_data) == FAILURE) {
+ 		return;
+ 	}
+ 
+@@ -2905,6 +2770,7 @@
+ 
+ 	/* Fill callback struct */
+ 	cb = emalloc (sizeof(newt_data_st));
++	memset (cb, 0, sizeof(newt_data_st));
+ 
+ 	if (!zend_is_callable(z_func_name, 0, &cb->func_name)) {
+ 		efree (cb->func_name);
+@@ -2933,9 +2799,7 @@
+ 	newtComponent component;
+ 	int takes_focus;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zb", &z_component, &takes_focus) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zb", &z_component, &takes_focus) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -2951,9 +2815,7 @@
+ 	zval * z_form;
+ 	newtComponent form;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 1) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "z", &z_form) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "z", &z_form) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -2971,9 +2833,7 @@
+ 	int rows;
+ 	newtGrid grid;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "ll", &cols, &rows) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "ll", &cols, &rows) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -3183,9 +3043,7 @@
+ 	newtComponent text;
+ 	newtGrid middle, buttons, grid;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zzz", &z_text, &z_middle, &z_buttons) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zzz", &z_text, &z_middle, &z_buttons) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -3207,9 +3065,7 @@
+ 	newtComponent text, middle;
+ 	newtGrid buttons, grid;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zzz", &z_text, &z_middle, &z_buttons) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zzz", &z_text, &z_middle, &z_buttons) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -3234,14 +3090,13 @@
+ 	newtComponent val;
+ 	int pad_left, pad_top, pad_right, pad_bottom, anchor, flags = 0;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc < 10 || argc > 11) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zlllzlllll|l", &z_grid, &col, &row, &z_val, &pad_left,
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zlllzlllll|l", &z_grid, &col, &row, &z_val, &pad_left,
+ 				&pad_top, &pad_right, &pad_bottom, &anchor, &flags) == FAILURE) {
+ 		return;
+ 	}
+ 	
+ 	ZEND_FETCH_RESOURCE(grid, newtGrid, &z_grid, -1, le_newt_grid_name, le_newt_grid);
++	ZEND_FETCH_RESOURCE(val, newtComponent, &z_val, -1, le_newt_comp_name, le_newt_comp);
+ 	newtGridSetField (grid, col, row, type, val, pad_left, pad_top, pad_right, pad_bottom, anchor, flags);
+ }
+ /* }}} */
+@@ -3255,9 +3110,7 @@
+ 	newtGrid grid;
+ 	int left, top;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zll", &z_grid, &left, &top) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zll", &z_grid, &left, &top) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -3275,9 +3128,7 @@
+ 	newtGrid grid;
+ 	int recurse;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zb", &z_grid, &recurse) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zb", &z_grid, &recurse) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -3296,9 +3147,7 @@
+ 	zval *z_width = NULL, *z_height = NULL;
+ 	int width, height;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zz/z/", &z_grid, &z_width, &z_height) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zz/z/", &z_grid, &z_width, &z_height) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -3326,9 +3175,7 @@
+ 	char *title = NULL;
+ 	int title_len;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 2) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zs", &z_grid, &title, &title_len) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zs", &z_grid, &title, &title_len) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -3348,9 +3195,7 @@
+ 	int title_len;
+ 	int left, top;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 4) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zsll", &z_grid, &title, &title_len, &left, &top) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zsll", &z_grid, &title, &title_len, &left, &top) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -3369,9 +3214,7 @@
+ 	newtComponent form;
+ 	int recurse;
+ 
+-	int argc = ZEND_NUM_ARGS();
+-	if (argc != 3) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (argc, "zzb", &z_grid, &z_form, &recurse) == FAILURE) {
++	if (zend_parse_parameters (ZEND_NUM_ARGS() TSRMLS_CC, "zzb", &z_grid, &z_form, &recurse) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -3395,8 +3238,7 @@
+ 	ulong button_i;
+ 	int buttons_num, i, bi;
+ 
+-	if (1 != ZEND_NUM_ARGS()) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters(1 TSRMLS_CC, "a/", &z_buttons) == FAILURE) {
++	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "a/", &z_buttons) == FAILURE) {
+ 		return;
+ 	}
+ 	
+@@ -3409,10 +3251,11 @@
+ 	zend_hash_internal_pointer_reset (Z_ARRVAL_P(z_buttons));
+ 
+ 	while (zend_hash_get_current_data (Z_ARRVAL_P(z_buttons), (void **)&z_button) == SUCCESS) {
+-		if (zend_hash_get_current_key(Z_ARRVAL_P(z_buttons), &button_text, 
+-					&button_i, 0) == HASH_KEY_IS_STRING) {
++		if (zend_hash_get_current_key(Z_ARRVAL_P(z_buttons), &button_text, &button_i, 0) == HASH_KEY_IS_STRING) {
+ 			newt_args[i] = (void *)button_text;
+ 		} else {
++			efree (newt_args);
++			efree (buttons);
+ 			php_error_docref (NULL TSRMLS_CC, E_ERROR, "Array index must be a string value");
+ 			return;
+ 		}
+@@ -3675,7 +3518,7 @@
+ 
+ 	int argc = ZEND_NUM_ARGS();
+ 	if (argc < 8) { WRONG_PARAM_COUNT; }
+-	if (zend_parse_parameters (7, "sslllla/", &title, &title_len, &text, &text_len,
++	if (zend_parse_parameters (7 TSRMLS_CC, "sslllla/", &title, &title_len, &text, &text_len,
+ 				&suggested_width, &flex_down, &flex_up, &data_width, &z_items) == FAILURE) {
+ 		return;
+ 	}
+diff -burN --exclude=CVS --exclude=package.xml --exclude=.cvsignore newt-0.2/php_newt.h newt/php_newt.h
+--- newt-0.2/php_newt.h	2004-12-08 17:42:35.000000000 +0100
++++ newt/php_newt.h	2004-12-13 20:59:34.486375544 +0100
+@@ -16,7 +16,7 @@
+   +----------------------------------------------------------------------+
+ */
+ 
+-/* $Id$ */
++/* $Id$ */
+ 
+ #include <newt.h>
+ 
+@@ -43,7 +43,9 @@
+ PHP_FUNCTION(newt_init);
+ PHP_FUNCTION(newt_finished);
+ PHP_FUNCTION(newt_cls);
++#ifdef HAVE_NEWT_RESIZE_SCREEN
+ PHP_FUNCTION(newt_resize_screen);
++#endif
+ PHP_FUNCTION(newt_wait_for_key);
+ PHP_FUNCTION(newt_clear_key_buffer);
+ PHP_FUNCTION(newt_delay);
+@@ -190,19 +192,18 @@
+ 
+ ZEND_BEGIN_MODULE_GLOBALS (newt)
+ 	char * newt_help_callback;
++	int newt_has_inited;
+ ZEND_END_MODULE_GLOBALS (newt)
+ 
+ #define REGISTER_NEWT_CONSTANT(__c) REGISTER_LONG_CONSTANT(#__c, __c, CONST_CS | CONST_PERSISTENT)
+ 
+-#define NEWT_GET_RESOURCE_BY_DATA(rsrc, data) _get_resource_by_data (rsrc, data, le_newt_comp)
+-
+-int _get_resource_by_data (zval * rsrc, void * data, int le_type);
+-void newt_comp_dtor (zend_rsrc_list_entry *rsrc TSRMLS_DC);
+-void newt_comp_callback_wrapper (newtComponent component, newt_data_st *cb);
+-void newt_entry_filter_callback_wrapper (newtComponent entry, newt_data_st * cb, int ch, int cursor);
+-void newt_suspend_callback_wrapper (newt_data_st * cb);
+-void newt_help_callback_wrapper (newtComponent form, char *help);
+-void newt_call_php_function (INTERNAL_FUNCTION_PARAMETERS, char *func_name, zval **ret_val, int argc, zval ***args);
++static int get_resource_by_data (zval * rsrc, void * data, int le_type);
++static void newt_comp_dtor (zend_rsrc_list_entry *rsrc TSRMLS_DC);
++static void newt_comp_callback_wrapper (newtComponent component, newt_data_st *cb);
++static void newt_entry_filter_callback_wrapper (newtComponent entry, newt_data_st * cb, int ch, int cursor);
++static void newt_suspend_callback_wrapper (newt_data_st * cb);
++static void newt_help_callback_wrapper (newtComponent form, char *help);
++static void newt_call_php_function (INTERNAL_FUNCTION_PARAMETERS, char *func_name, zval **ret_val, int argc, zval ***args);
+ 
+ #ifdef ZTS
+ #define NEWT_G(v) TSRMG(newt_globals_id, zend_newt_globals *, v)
