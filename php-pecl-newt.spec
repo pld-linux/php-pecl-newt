@@ -1,8 +1,8 @@
 %define		_modname	newt
 %define		_status		beta
 
-Summary:	%{_modname} - Extension for RedHat Newt windowing library
-Summary(pl):	%{_modname} - Rozszerzenie biblioteki Newt
+Summary:	%{_modname} - extension for RedHat Newt windowing library
+Summary(pl):	%{_modname} - rozszerzenie biblioteki Newt
 Name:		php-pecl-%{_modname}
 Version:	0.2
 Release:	1
