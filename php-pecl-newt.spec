@@ -2,7 +2,7 @@
 %define		_status		beta
 
 Summary:	%{_modname} - extension for RedHat Newt windowing library
-Summary(pl):	%{_modname} - rozszerzenie biblioteki Newt
+Summary(pl):	%{_modname} - rozszerzenie dla biblioteki Newt
 Name:		php-pecl-%{_modname}
 Version:	0.2
 Release:	1
@@ -34,9 +34,16 @@ programming language.
 
 In PECL status of this extension is: %{_status}.
 
-#%description -l pl
-#
-#To rozszerzenie ma w PECL status: %{_status}.
+%description -l pl
+PHP-NEWT to rozszerzenie jêzyka PHP dla biblioteki Newt - terminalowej
+biblioteki okienek i widgetów do pisania aplikacji z przyjaznym dla
+u¿ytkownika interfejsem. Po w³±czeniu tego rozszerzenia PHP bêdzie
+udostêpniaæ widgety Newta, takie jak okienka, przyciski, pola wyboru,
+etykiety, pola edycyjne, paski przewijania, pola tekstowe, skale itp.
+Rozszerzenia tego u¿ywa siê bardzo podobnie do oryginalnego API Newta
+w jêzyku C.
+
+To rozszerzenie ma w PECL status: %{_status}.
 
 %prep
 %setup -q -c
