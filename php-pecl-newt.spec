@@ -11,7 +11,6 @@ Group:		Development/Languages/PHP
 Source0:	http://pecl.php.net/get/%{_modname}-%{version}.tgz
 # Source0-md5:	bb208abdcf759bd789822ef6ddaf77f2
 URL:		http://pecl.php.net/package/newt/
-BuildRequires:	libtool
 BuildRequires:	newt-devel
 BuildRequires:	php-devel >= 4.3.0
 Requires:	php-common >= 4.3.0
