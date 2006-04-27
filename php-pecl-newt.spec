@@ -1,3 +1,5 @@
+# TODO
+# - current php segfaults when installed
 %define		_modname	newt
 %define		_status		beta
 %define		_sysconfdir	/etc/php
@@ -6,18 +8,20 @@ Summary:	%{_modname} - extension for RedHat Newt windowing library
 Summary(pl):	%{_modname} - rozszerzenie dla biblioteki Newt
 Name:		php-pecl-%{_modname}
 Version:	1.0
-Release:	6
+Release:	7
 License:	PHP
 Group:		Development/Languages/PHP
 Source0:	http://pecl.php.net/get/%{_modname}-%{version}.tgz
 # Source0-md5:	bb208abdcf759bd789822ef6ddaf77f2
 URL:		http://pecl.php.net/package/newt/
 BuildRequires:	newt-devel
-BuildRequires:	php-devel >= 3:5.0.0
+BuildRequires:	php-devel >= 4:5.0.0
 BuildRequires:	rpmbuild(macros) >= 1.254
 %{?requires_php_extension}
+Requires(triggerpostun):	sed >= 4.0
 Requires:	%{_sysconfdir}/conf.d
 Requires:	php-cli
+Requires:	php-common >= 4:5.1.2-9.16
 Obsoletes:	php-pear-%{_modname}
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
@@ -54,22 +58,22 @@ phpize
 
 %install
 rm -rf $RPM_BUILD_ROOT
-install -d $RPM_BUILD_ROOT{%{_sysconfdir}/conf.d,%{extensionsdir}}
+install -d $RPM_BUILD_ROOT{%{_sysconfdir}/{cli,conf}.d,%{extensionsdir}}
 
 install %{_modname}-%{version}/modules/%{_modname}.so $RPM_BUILD_ROOT%{extensionsdir}
+cat <<'EOF' > $RPM_BUILD_ROOT%{_sysconfdir}/cli.d/%{_modname}.ini
+; Enable %{_modname} extension module
+extension=%{_modname}.so
+EOF
 
 %clean
 rm -rf $RPM_BUILD_ROOT
 
-%post
-%{_sbindir}/php-module-install install %{_modname} %{_sysconfdir}/php-cli.ini
-
-%preun
-if [ "$1" = "0" ]; then
-	%{_sbindir}/php-module-install remove %{_modname} %{_sysconfdir}/php-cli.ini
-fi
+%triggerpostun -- %{name} < 1.0-6.1
+%{__sed} -i -e '/^extension[[:space:]]*=[[:space:]]*%{_modname}\.so/d' %{_sysconfdir}/php-cli.ini
 
 %files
 %defattr(644,root,root,755)
 %doc %{_modname}-%{version}/{CREDITS,TODO}
+%config(noreplace) %verify(not md5 mtime size) %{_sysconfdir}/cli.d/%{_modname}.ini
 %attr(755,root,root) %{extensionsdir}/%{_modname}.so
