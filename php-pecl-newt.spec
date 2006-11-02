@@ -16,7 +16,7 @@ Source0:	http://pecl.php.net/get/%{_modname}-%{version}.tgz
 URL:		http://pecl.php.net/package/newt/
 BuildRequires:	newt-devel
 BuildRequires:	php-devel >= 4:5.0.0
-BuildRequires:	rpmbuild(macros) >= 1.254
+BuildRequires:	rpmbuild(macros) >= 1.322
 %{?requires_php_extension}
 Requires(triggerpostun):	sed >= 4.0
 Requires:	%{_sysconfdir}/cli.d
