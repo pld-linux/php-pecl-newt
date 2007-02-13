@@ -5,7 +5,7 @@
 %define		_sysconfdir	/etc/php
 %define		extensionsdir	%(php-config --extension-dir 2>/dev/null)
 Summary:	%{_modname} - extension for RedHat Newt windowing library
-Summary(pl.UTF-8):   %{_modname} - rozszerzenie dla biblioteki Newt
+Summary(pl.UTF-8):	%{_modname} - rozszerzenie dla biblioteki Newt
 Name:		php-pecl-%{_modname}
 Version:	1.1
 Release:	1
