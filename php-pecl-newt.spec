@@ -7,12 +7,12 @@
 Summary:	%{_modname} - extension for RedHat Newt windowing library
 Summary(pl.UTF-8):	%{_modname} - rozszerzenie dla biblioteki Newt
 Name:		php-pecl-%{_modname}
-Version:	1.1
+Version:	1.2.1
 Release:	1
 License:	PHP
 Group:		Development/Languages/PHP
 Source0:	http://pecl.php.net/get/%{_modname}-%{version}.tgz
-# Source0-md5:	9a7e4d377a16e4ff101d31d4d29f14b8
+# Source0-md5:	c57fa6a76c7da3bc53ba986b41c9e49a
 URL:		http://pecl.php.net/package/newt/
 BuildRequires:	newt-devel
 BuildRequires:	php-devel >= 4:5.0.0
@@ -73,6 +73,6 @@ rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(644,root,root,755)
-%doc %{_modname}-%{version}/{CREDITS,TODO}
+%doc %{_modname}-%{version}/{CREDITS,TODO,examples}
 %config(noreplace) %verify(not md5 mtime size) %{_sysconfdir}/cli.d/%{_modname}.ini
 %attr(755,root,root) %{extensionsdir}/%{_modname}.so
