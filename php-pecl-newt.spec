@@ -48,22 +48,23 @@ To rozszerzenie ma w PECL status: %{_status}.
 
 %prep
 %setup -q -c
+mv %{_modname}-%{version}/* .
 
 %build
-cd %{_modname}-%{version}
 phpize
 %configure
 %{__make}
 
 %install
 rm -rf $RPM_BUILD_ROOT
-install -d $RPM_BUILD_ROOT{%{_sysconfdir}/{cli,conf}.d,%{extensionsdir}}
+install -d $RPM_BUILD_ROOT{%{_sysconfdir}/{cli,conf}.d,%{extensionsdir},%{_examplesdir}}
 
-install %{_modname}-%{version}/modules/%{_modname}.so $RPM_BUILD_ROOT%{extensionsdir}
+install modules/%{_modname}.so $RPM_BUILD_ROOT%{extensionsdir}
 cat <<'EOF' > $RPM_BUILD_ROOT%{_sysconfdir}/cli.d/%{_modname}.ini
 ; Enable %{_modname} extension module
 extension=%{_modname}.so
 EOF
+cp -a examples $RPM_BUILD_ROOT%{_examplesdir}/%{name}-%{version}
 
 %clean
 rm -rf $RPM_BUILD_ROOT
@@ -73,6 +74,7 @@ rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(644,root,root,755)
-%doc %{_modname}-%{version}/{CREDITS,TODO,examples}
+%doc CREDITS TODO
 %config(noreplace) %verify(not md5 mtime size) %{_sysconfdir}/cli.d/%{_modname}.ini
 %attr(755,root,root) %{extensionsdir}/%{_modname}.so
+%{_examplesdir}/%{name}-%{version}
