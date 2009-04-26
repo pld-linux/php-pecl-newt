@@ -1,7 +1,7 @@
 # TODO
 # - current php segfaults when installed
 %define		_modname	newt
-%define		_status		beta
+%define		_status		stable
 %define		_sysconfdir	/etc/php
 %define		extensionsdir	%(php-config --extension-dir 2>/dev/null)
 Summary:	%{_modname} - extension for RedHat Newt windowing library
@@ -9,7 +9,7 @@ Summary(pl.UTF-8):	%{_modname} - rozszerzenie dla biblioteki Newt
 Name:		php-pecl-%{_modname}
 Version:	1.2.1
 Release:	1
-License:	PHP
+License:	PHP 3.01
 Group:		Development/Languages/PHP
 Source0:	http://pecl.php.net/get/%{_modname}-%{version}.tgz
 # Source0-md5:	c57fa6a76c7da3bc53ba986b41c9e49a
