@@ -1,0 +1,38 @@
+--- php-pecl-newt-1.2.4/newt.c~	2009-11-04 17:29:56.000000000 +0100
++++ php-pecl-newt-1.2.4/newt.c	2009-11-07 17:22:50.222589714 +0100
+@@ -900,7 +900,7 @@
+ 		convert_to_string_ex (&z_callback);
+ 	}
+ 
+-	if (!zend_is_callable(z_callback, 0, &cb->func_name TSRMLS_CC)) {
++	if (!zend_is_callable(z_callback, 0, &cb->func_name)) {
+ 		php_error_docref(NULL TSRMLS_CC, E_ERROR, "%s: not valid callback", cb->func_name);
+ 		efree (cb->func_name);
+ 		efree (cb);
+@@ -940,7 +940,7 @@
+ 		convert_to_string_ex (&z_callback);
+ 	}
+ 
+-	if (!zend_is_callable(z_callback, 0, &cb->func_name TSRMLS_CC)) {
++	if (!zend_is_callable(z_callback, 0, &cb->func_name)) {
+ 		php_error_docref(NULL TSRMLS_CC, E_ERROR, "%s: not valid callback", cb->func_name);
+ 		efree (cb->func_name);
+ 		efree (cb);
+@@ -2695,7 +2695,7 @@
+ 		convert_to_string_ex (&z_callback);
+ 	}
+ 
+-	if (!zend_is_callable(z_callback, 0, &cb->func_name TSRMLS_CC)) {
++	if (!zend_is_callable(z_callback, 0, &cb->func_name)) {
+ 		php_error_docref(NULL TSRMLS_CC, E_ERROR, "%s: not valid callback", cb->func_name);
+ 		efree (cb->func_name);
+ 		efree (cb);
+@@ -2815,7 +2815,7 @@
+ 	cb = emalloc(sizeof(php_newt_cb));
+ 	memset (cb, 0, sizeof(php_newt_cb));
+ 
+-	if (!zend_is_callable(z_callback, 0, &cb->func_name TSRMLS_CC)) {
++	if (!zend_is_callable(z_callback, 0, &cb->func_name)) {
+ 		php_error_docref(NULL TSRMLS_CC, E_ERROR, "%s: not valid callback", cb->func_name);
+ 		efree (cb->func_name);
+ 		efree (cb);
