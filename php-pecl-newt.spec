@@ -7,7 +7,7 @@ Summary:	%{modname} - extension for RedHat Newt windowing library
 Summary(pl.UTF-8):	%{modname} - rozszerzenie dla biblioteki Newt
 Name:		%{php_name}-pecl-%{modname}
 Version:	1.2.5
-Release:	1
+Release:	2
 License:	PHP 3.01
 Group:		Development/Languages/PHP
 Source0:	http://pecl.php.net/get/%{modname}-%{version}.tgz
